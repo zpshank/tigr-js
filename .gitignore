@@ -1,0 +1,5 @@
+libtigrJS.a
+examples/hello
+compile_commands.json
+.cache/
+.obj/
