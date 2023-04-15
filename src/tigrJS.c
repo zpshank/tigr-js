@@ -111,12 +111,10 @@ static JSValue js_tigr_tigr_update(JSContext *ctx, JSValueConst this, int argc, 
 	return JS_UNDEFINED;
 }
 
-static JSValue js_tigr_tigr_clear(JSContext *ctx, JSValueConst this, int argc, JSValueConst* argv) {
+static JSValue js_tigr_tigr_clear(JSContext *ctx, JSValueConst this, int argc, JSValueConst *argv) {
 	Tigr* t = JS_GetOpaque(this, js_tigr_tigr_class_id);
 
-	if (t==NULL) {
-		return JS_EXCEPTION;
-	}
+	if (t==NULL) return JS_EXCEPTION;
 
 	TPixel p = {0};
 	if(js_tigr_val_to_tpixel(ctx, argv[0], &p)) {
@@ -124,6 +122,44 @@ static JSValue js_tigr_tigr_clear(JSContext *ctx, JSValueConst this, int argc, J
 	}
 
 	tigrClear(t, p);
+
+	return JS_UNDEFINED;
+}
+
+static JSValue js_tigr_tigr_print(JSContext *ctx, JSValueConst this, int argc, JSValueConst *argv) {
+	Tigr *t = JS_GetOpaque(this, js_tigr_tigr_class_id);
+
+	if (t==NULL)
+		return JS_EXCEPTION;
+
+	
+	TigrFont *f;
+	int x;
+	int y;
+	TPixel p = {0};
+
+	// Get arguments
+	// 0: Font
+	// 1: x
+	// 2: y
+	// 3: color
+	// 4: String
+	f = JS_GetOpaque(argv[0], js_tigr_font_class_id);
+	if(f == NULL)
+		return JS_EXCEPTION;
+
+	if(JS_ToInt32(ctx, &x, argv[1]))
+		return JS_EXCEPTION;
+
+	if(JS_ToInt32(ctx, &y, argv[2]))
+		return JS_EXCEPTION;
+
+	if(js_tigr_val_to_tpixel(ctx, argv[3], &p))
+		return JS_EXCEPTION;
+
+	const char *str = JS_ToCString(ctx, argv[4]);
+
+	tigrPrint(t, f, x, y, p, str);
 
 	return JS_UNDEFINED;
 }
@@ -142,7 +178,8 @@ static const JSClassDef js_tigr_tigr_class = {
 static const JSCFunctionListEntry js_tigr_tigr_proto_funcs[] = {
 	JS_CFUNC_DEF("closed", 0, js_tigr_tigr_closed),
 	JS_CFUNC_DEF("update", 0, js_tigr_tigr_update),
-	JS_CFUNC_DEF("clear", 1, js_tigr_tigr_clear)
+	JS_CFUNC_DEF("clear", 1, js_tigr_tigr_clear),
+	JS_CFUNC_DEF("print", 5, js_tigr_tigr_print)
 };
 
 /** TIGR FONT **/
@@ -167,13 +204,58 @@ static JSValue js_tigr_font_ctor(JSContext *ctx, JSValueConst new_target, int ar
 		goto fail;
 	}
 
+	// TODO: Call tigrLoadFont
+
+	return obj;
+
 fail:
 	JS_FreeValue(ctx, obj);
 	return JS_EXCEPTION;
 }
 
+static JSValue js_tigr_font_text_width(JSContext *ctx, JSValueConst this, int argc, JSValueConst *argv) {
+	TigrFont *f = JS_GetOpaque(this, js_tigr_font_class_id);
+
+	if (f == NULL)
+		return JS_EXCEPTION;
+
+	const char* str = JS_ToCString(ctx, argv[0]);
+
+	if (str == NULL)
+		return JS_EXCEPTION;
+
+	return JS_NewInt32(ctx, tigrTextWidth(f, str));
+}
+
+static JSValue js_tigr_font_text_height(JSContext *ctx, JSValueConst this, int argc, JSValueConst *argv) {
+	TigrFont *f = JS_GetOpaque(this, js_tigr_font_class_id);
+
+	if (f == NULL)
+		return JS_EXCEPTION;
+
+	const char* str = JS_ToCString(ctx, argv[0]);
+
+	if (str == NULL)
+		return JS_EXCEPTION;
+
+	return JS_NewInt32(ctx, tigrTextHeight(f, str));
+}
+
+static void js_tigr_font_finalizer(JSRuntime* rt, JSValue val) {
+	TigrFont* f = JS_GetOpaque(val, js_tigr_font_class_id);
+
+	if (f != NULL)
+		tigrFreeFont(f);
+}
+
 static const JSClassDef js_tigr_font_class = {
-	"Font"
+	"Font",
+	.finalizer = js_tigr_font_finalizer
+};
+
+static const JSCFunctionListEntry js_tigr_font_funcs[] = {
+	JS_CFUNC_DEF("textWidth", 1, js_tigr_font_text_width),
+	JS_CFUNC_DEF("textHeight", 1, js_tigr_font_text_height)
 };
 
 /** GLOBAL FUNCTIONS **/
@@ -238,7 +320,7 @@ static JSValue js_tigr_rgb(JSContext *ctx, JSValueConst this, int argc, JSValueC
 		.r = r,
 		.b = b,
 		.g = g,
-		.a = 0
+		.a = 0xff
 	};
 
 	return js_tigr_rgba_internal(ctx, &p);
@@ -268,7 +350,22 @@ static int js_tigr_init(JSContext *ctx, JSModuleDef *m) {
 	JS_SetClassProto(ctx, js_tigr_tigr_class_id, proto);
 
 	JS_SetModuleExport(ctx, m, "Window", obj);
+
+	// Setup Font Prototype
+	proto = JS_NewObject(ctx);
+	JS_SetPropertyFunctionList(ctx, proto, js_tigr_font_funcs, countof(js_tigr_font_funcs));
 	
+	obj = JS_NewCFunction2(ctx, js_tigr_font_ctor, "Font", 0, JS_CFUNC_constructor, 0);
+	JS_SetConstructor(ctx, obj, proto);
+
+	JS_SetClassProto(ctx, js_tigr_font_class_id, proto);
+
+	JS_SetModuleExport(ctx, m, "Font", obj);
+
+	// Setup Built-In Font Reference
+	obj = JS_NewObjectProtoClass(ctx, proto, js_tigr_font_class_id);
+	JS_SetOpaque(obj, tfont);
+	JS_SetModuleExport(ctx, m, "TFONT", obj);
 
 	return 0;
 }
@@ -287,5 +384,7 @@ JSModuleDef *JS_INIT_MODULE(JSContext *ctx, const char *module_name)
         return NULL;
 		JS_AddModuleExportList(ctx, m, js_tigr_funcs, countof(js_tigr_funcs));
 		JS_AddModuleExport(ctx, m, "Window");
+		JS_AddModuleExport(ctx, m, "Font");
+		JS_AddModuleExport(ctx, m, "TFONT");
     return m;
 }
